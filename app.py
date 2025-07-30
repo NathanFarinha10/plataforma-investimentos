@@ -25,7 +25,7 @@ PORTFOLIOS = {
 
 # 2. Mapeamento de Classes de Ativo para Tickers do Yahoo Finance (PROXIES)
 ASSET_CLASSES_TICKERS = {
-    "Caixa": "BSW.L",  # Usando um ETF de bonds de curto prazo como proxy para caixa
+    "Caixa": "BSW.L",
     "Renda Fixa Brasil": "B5P211.SA",
     "Renda Fixa Internacional": "BND",
     "Ações Brasil": "BOVA11.SA",
@@ -43,34 +43,60 @@ TESES = {
     "Agressivo": "Prioriza o potencial máximo de crescimento no longo prazo, aceitando volatilidade significativamente maior."
 }
 
-
 # --- FUNÇÕES DE LÓGICA E CÁLCULO ---
 
 # Usamos o cache do Streamlit para não baixar os mesmos dados repetidamente.
 @st.cache_data
 def get_market_data(tickers, period="5y"):
     """Baixa os dados históricos de preços 'Adj Close' para uma lista de tickers."""
-    data = yf.download(tickers, period=period, progress=False)['Adj Close']
+    data = yf.download(tickers, period=period, progress=False)
+    
+    # Se yfinance retornar dados de múltiplos tickers, as colunas são um MultiIndex.
+    # Se retornar dados de apenas um, pode não ter o nível 'Adj Close'.
+    if isinstance(data.columns, pd.MultiIndex):
+        data = data['Adj Close']
+    else:
+        # Se for um DataFrame simples (poucos tickers bem-sucedidos), garanta que está tudo ok.
+        pass
+
+    # **A CORREÇÃO ESTÁ AQUI**
+    # Se, após o download, 'data' for uma Série (apenas um ticker funcionou), converta para DataFrame.
+    if isinstance(data, pd.Series):
+        data = data.to_frame(name=tickers[0]) # Converte a Série em um DataFrame com uma coluna
+
     return data.dropna()
+
 
 @st.cache_data
 def calculate_portfolio_performance(weights, returns):
     """Calcula a performance de um portfólio com base nos pesos e retornos dos ativos."""
-    portfolio_return = returns.dot(weights)
+    # Garante que os pesos e retornos estejam alinhados
+    common_assets = returns.columns.intersection(weights.index)
+    
+    if len(common_assets) == 0:
+        return pd.Series(1.0, index=returns.index) # Retorna uma série de 1s se não houver ativos em comum
+
+    filtered_returns = returns[common_assets]
+    filtered_weights = weights[common_assets]
+
+    portfolio_return = filtered_returns.dot(filtered_weights)
     cumulative_returns = (1 + portfolio_return).cumprod()
     return cumulative_returns
 
+
 def calculate_metrics(returns):
     """Calcula as principais métricas de risco e retorno."""
-    total_return = (returns.iloc[-1] - 1) * 100
+    if len(returns) < 2: # Precisa de pelo menos 2 pontos para calcular métricas
+        return {"Retorno Total (%)": "N/A", "Volatilidade Anualizada (%)": "N/A", "Índice de Sharpe": "N/A"}
+
+    total_return = (returns.iloc[-1] - 1)
     annualized_return = (returns.iloc[-1])**(252/len(returns)) - 1
     annualized_volatility = returns.pct_change().std() * np.sqrt(252)
     
-    # Simples, assumindo taxa livre de risco de 0 para o cálculo do Sharpe.
-    sharpe_ratio = annualized_return / annualized_volatility if annualized_volatility != 0 else 0
+    sharpe_ratio = annualized_return / annualized_volatility if annualized_volatility > 0 else 0
     
     return {
-        "Retorno Total (%)": f"{total_return:.2f}",
+        "Retorno Total (%)": f"{total_return * 100:.2f}",
         "Volatilidade Anualizada (%)": f"{annualized_volatility * 100:.2f}",
         "Índice de Sharpe": f"{sharpe_ratio:.2f}"
     }
@@ -82,75 +108,66 @@ st.markdown("Análise de performance e simulação interativa de portfólios.")
 
 # --- SIDEBAR ---
 st.sidebar.header("Configurações")
-selected_portfolio_name = st.sidebar.selectbox(
-    "Selecione um perfil para análise:",
-    list(PORTFOLIOS.keys())
-)
+selected_portfolio_name = st.sidebar.selectbox("Selecione um perfil para análise:", list(PORTFOLIOS.keys()))
 st.sidebar.info(TESES.get(selected_portfolio_name, "Tese de investimento não disponível."))
 st.sidebar.markdown("---")
 st.sidebar.markdown("Os dados são obtidos via `yfinance` e os ETFs são usados como *proxies* para as classes de ativos.")
 
-
 # --- LÓGICA PRINCIPAL ---
 
-# 1. Pega a alocação do portfólio modelo selecionado
 model_allocation = PORTFOLIOS[selected_portfolio_name]
 asset_classes = list(model_allocation.keys())
-model_weights = np.array(list(model_allocation.values()))
-
-# 2. Filtra os tickers necessários e baixa os dados de mercado
 tickers_to_download = [ASSET_CLASSES_TICKERS[asset] for asset in asset_classes]
+
 try:
     market_data = get_market_data(tickers_to_download)
-    daily_returns = market_data.pct_change().dropna()
     
-    # Renomeia colunas para nomes amigáveis
-    daily_returns.columns = asset_classes
+    # Se alguns tickers falharam, market_data terá menos colunas que o esperado.
+    # Vamos trabalhar apenas com os dados que conseguimos baixar.
+    available_tickers = market_data.columns.tolist()
     
-    st.header(f"Análise do Perfil: {selected_portfolio_name}")
-    
-    # 3. Seção do Simulador Interativo
-    st.subheader("🧪 Simulador Interativo")
-    st.markdown("Ajuste os pesos abaixo para simular uma carteira personalizada (desvio de até 5% do modelo).")
-    
-    cols = st.columns(len(asset_classes))
-    custom_weights = []
-    
-    for i, asset in enumerate(asset_classes):
-        with cols[i]:
-            original_weight = model_allocation[asset]
-            # Usando a regra de +/- 5%
-            min_val = max(0.0, original_weight - 0.05)
-            max_val = min(1.0, original_weight + 0.05)
-            
-            custom_weight = st.slider(
-                f"{asset}",
-                min_value=min_val,
-                max_value=max_val,
-                value=original_weight,
-                step=0.01,
-                format="%.0f%%",  # Mostra o valor como porcentagem
-                key=f"slider_{asset}" # Chave única para cada slider
-            )
-            custom_weights.append(custom_weight)
+    # Mapeia os tickers disponíveis de volta para as classes de ativos
+    ticker_to_asset_map = {v: k for k, v in ASSET_CLASSES_TICKERS.items()}
+    available_assets = [ticker_to_asset_map[ticker] for ticker in available_tickers]
 
-    # Normaliza os pesos para que a soma seja sempre 100%
-    custom_weights = np.array(custom_weights)
-    custom_weights /= custom_weights.sum()
+    daily_returns = market_data.pct_change().dropna()
+    daily_returns.columns = available_assets # Renomeia para nomes amigáveis
+
+    st.header(f"Análise do Perfil: {selected_portfolio_name}")
+
+    # --- SIMULADOR ---
+    st.subheader("🧪 Simulador Interativo")
+    st.markdown("Ajuste os pesos para simular uma carteira personalizada (desvio de até 5% do modelo).")
     
-    # 4. Cálculo e Exibição dos Resultados
+    # Filtra o dicionário de alocação modelo para conter apenas os ativos disponíveis
+    filtered_model_allocation = {asset: model_allocation[asset] for asset in available_assets}
+
+    cols = st.columns(len(available_assets))
+    custom_weights_dict = {}
+
+    for i, asset in enumerate(available_assets):
+        with cols[i]:
+            original_weight = filtered_model_allocation[asset]
+            min_val, max_val = max(0.0, original_weight - 0.05), min(1.0, original_weight + 0.05)
+            custom_weight = st.slider(f"{asset}", min_val, max_val, original_weight, 0.01, "%.0f%%", key=f"slider_{asset}")
+            custom_weights_dict[asset] = custom_weight
+
+    # Normaliza os pesos
+    total_custom_weight = sum(custom_weights_dict.values())
+    if total_custom_weight > 0:
+        custom_weights_series = pd.Series({asset: weight / total_custom_weight for asset, weight in custom_weights_dict.items()})
+    else:
+        custom_weights_series = pd.Series(custom_weights_dict)
+
+    # --- CÁLCULO E EXIBIÇÃO ---
+    model_weights_series = pd.Series(filtered_model_allocation)
     
-    # Calcula performance para o portfólio modelo E o customizado
-    model_performance = calculate_portfolio_performance(model_weights, daily_returns)
-    custom_performance = calculate_portfolio_performance(custom_weights, daily_returns)
+    model_performance = calculate_portfolio_performance(model_weights_series, daily_returns)
+    custom_performance = calculate_portfolio_performance(custom_weights_series, daily_returns)
     
-    # Combina os resultados em um DataFrame para o gráfico
-    performance_df = pd.DataFrame({
-        "Modelo": model_performance,
-        "Personalizado": custom_performance
-    })
+    performance_df = pd.DataFrame({"Modelo": model_performance, "Personalizado": custom_performance})
     
-    st.subheader("Performance Histórica (Últimos 5 anos)")
+    st.subheader("Performance Histórica")
     st.line_chart(performance_df)
     
     st.subheader("Métricas de Risco e Retorno (Carteira Personalizada)")
@@ -162,4 +179,5 @@ try:
     metric_cols[2].metric(label="Índice de Sharpe", value=metrics['Índice de Sharpe'])
 
 except Exception as e:
-    st.error(f"Não foi possível carregar os dados de mercado. Verifique os tickers ou tente novamente mais tarde. Erro: {e}")
+    st.error(f"Não foi possível carregar ou processar os dados de mercado. Verifique os tickers ou tente novamente.")
+    st.error(f"Detalhe do erro: {e}")
