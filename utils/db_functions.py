@@ -1,20 +1,17 @@
+# utils/db_functions.py
 import sqlite3
 import pandas as pd
 from datetime import datetime
-import streamlit as st # Importamos streamlit para usar o cache
+import streamlit as st
 
 DB_PATH = 'gestora.db'
 
 def initialize_database():
-    """
-    Verifica e cria o banco de dados e a tabela se não existirem.
-    Popula com dados iniciais se a tabela estiver vazia.
-    Esta função é segura para ser executada toda vez que o app inicia.
-    """
+    """Verifica e cria o banco de dados e as tabelas se não existirem."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # A cláusula "IF NOT EXISTS" garante que não teremos erro se a tabela já existir.
+    # Tabela de Alocações
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS allocations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,12 +23,21 @@ def initialize_database():
         )
     ''')
 
-    # Verifica se a tabela está vazia antes de inserir dados iniciais.
-    cursor.execute("SELECT COUNT(*) FROM allocations")
-    count = cursor.fetchone()[0]
+    # Tabela para as Análises de Mercado
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            source TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            author TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    ''')
 
-    if count == 0:
-        # Se a tabela está vazia, insere os dados do portfólio Conservador.
+    # Popula a tabela 'allocations' se estiver vazia
+    cursor.execute("SELECT COUNT(*) FROM allocations")
+    if cursor.fetchone()[0] == 0:
         initial_allocations = {
             "Conservador": {
                 "Caixa": 50.0, "Renda Fixa Brasil": 30.0, "Renda Fixa Internacional": 10.0,
@@ -41,13 +47,11 @@ def initialize_database():
         portfolio_name = "Conservador"
         current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         batch_id = 1
-
         for asset, pct in initial_allocations[portfolio_name].items():
             cursor.execute('''
                 INSERT INTO allocations (portfolio_name, asset_class, allocation_pct, updated_at, batch_id)
                 VALUES (?, ?, ?, ?, ?)
             ''', (portfolio_name, asset, pct, current_time, batch_id))
-        
         conn.commit()
 
     conn.close()
@@ -58,65 +62,63 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-@st.cache_data(ttl=300) # Cache de 5 minutos
+@st.cache_data(ttl=300)
 def get_latest_allocations(portfolio_name):
     """Busca a alocação mais recente para um determinado portfólio."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT MAX(batch_id) FROM allocations WHERE portfolio_name = ?", (portfolio_name,))
-    latest_batch_id = cursor.fetchone()[0]
-    
-    if latest_batch_id is None:
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(batch_id) FROM allocations WHERE portfolio_name = ?", (portfolio_name,))
+        latest_batch_id = cursor.fetchone()[0]
+        if latest_batch_id is None:
+            return pd.DataFrame()
+        query = "SELECT asset_class, allocation_pct FROM allocations WHERE portfolio_name = ? AND batch_id = ?"
+        df = pd.read_sql_query(query, conn, params=(portfolio_name, latest_batch_id))
+        return df
+    finally:
         conn.close()
-        return pd.DataFrame()
-
-    query = "SELECT asset_class, allocation_pct FROM allocations WHERE portfolio_name = ? AND batch_id = ?"
-    df = pd.read_sql_query(query, conn, params=(portfolio_name, latest_batch_id))
-    
-    conn.close()
-    return df
 
 def save_allocations(portfolio_name, allocations_dict):
     """Salva um novo conjunto de alocações no banco de dados."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT MAX(batch_id) FROM allocations")
-    max_batch_id = cursor.fetchone()[0]
-    new_batch_id = (max_batch_id or 0) + 1
-
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-    for asset, pct in allocations_dict.items():
-        cursor.execute('''
-            INSERT INTO allocations (portfolio_name, asset_class, allocation_pct, updated_at, batch_id)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (portfolio_name, asset, pct, current_time, new_batch_id))
-    
-    conn.commit()
-    conn.close()
-    st.cache_data.clear() # Limpa o cache após salvar novos dados
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(batch_id) FROM allocations")
+        max_batch_id = cursor.fetchone()[0]
+        new_batch_id = (max_batch_id or 0) + 1
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        for asset, pct in allocations_dict.items():
+            cursor.execute('''
+                INSERT INTO allocations (portfolio_name, asset_class, allocation_pct, updated_at, batch_id)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (portfolio_name, asset, pct, current_time, new_batch_id))
+        conn.commit()
+    finally:
+        conn.close()
+    st.cache_data.clear()
 
 def save_analysis(title, source, summary, author):
     """Salva uma nova análise de mercado no banco de dados."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cursor.execute('''
-        INSERT INTO analyses (title, source, summary, author, created_at)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (title, source, summary, author, current_time))
-    conn.commit()
-    conn.close()
-    st.cache_data.clear() # Limpa o cache para garantir que a nova análise apareça
+    try:
+        cursor = conn.cursor()
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+            INSERT INTO analyses (title, source, summary, author, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (title, source, summary, author, current_time))
+        conn.commit()
+    finally:
+        conn.close()
+    st.cache_data.clear()
 
 @st.cache_data(ttl=300)
 def get_all_analyses():
     """Busca todas as análises salvas, da mais recente para a mais antiga."""
     conn = get_db_connection()
-    query = "SELECT title, source, summary, author, created_at FROM analyses ORDER BY created_at DESC"
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    return df
-# >>> FIM DAS NOVAS FUNÇÕES <<<
+    try:
+        query = "SELECT title, source, summary, author, created_at FROM analyses ORDER BY created_at DESC"
+        df = pd.read_sql_query(query, conn)
+        return df
+    finally:
+        conn.close()
