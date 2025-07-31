@@ -3,44 +3,50 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-# --- MAPEAMENTO DE TICKERS (COM CORREÇÃO) ---
+# --- MAPEAMENTO DE TICKERS (COM SUGESTÃO DE MELHORIA) ---
+# O ticker ^IRX (título do tesouro americano) pode ser instável.
+# SHV é um ETF de títulos de curto prazo, uma proxy mais estável para "Caixa".
 TICKER_MAP = {
-    "Caixa": "^IRX",
+    "Caixa": "SHV",  # <<< TROCADO DE ^IRX PARA SHV (ETF mais estável)
     "Renda Fixa Brasil": "B5P211.SA",
     "Renda Fixa Internacional": "BND",
     "Ações Brasil": "^BVSP",
     "Ações Internacional": "IVV",
     "Fundos Imobiliários": "IFIX.SA",
-    "Alternativos": "GLD"  # <<< CORRIGIDO DE "GOLD" PARA "GLD" (ETF de Ouro)
+    "Alternativos": "GLD"
 }
 
 RISK_FREE_RATE = 0.105
 
-# --- FUNÇÃO get_market_data (MAIS ROBUSTA) ---
+# --- FUNÇÃO get_market_data (VERSÃO FINAL, ROBUSTA) ---
 @st.cache_data(ttl=3600)
 def get_market_data(tickers):
     """
-    Baixa os dados históricos dos últimos 3 anos.
-    Esta versão é robusta para lidar com 1 ou múltiplos tickers.
+    Baixa os dados históricos ticker por ticker para máxima robustez.
+    Se um ticker falhar, ele é ignorado e um aviso é exibido.
     """
-    data = yf.download(tickers, period="3y")
-    
-    if data.empty:
+    all_data = []
+    for ticker in tickers:
+        try:
+            # Baixa dados para um único ticker
+            data = yf.download(ticker, period="3y", progress=False) # progress=False para limpar o log
+            if data.empty:
+                raise ValueError("DataFrame vazio retornado.")
+            
+            # Pega o 'Adj Close' e renomeia a série com o nome do ticker
+            adj_close = data['Adj Close'].rename(ticker)
+            all_data.append(adj_close)
+
+        except Exception as e:
+            # Se falhar, exibe um aviso na tela para o usuário
+            st.warning(f"Não foi possível obter dados para o ticker '{ticker}'. Ele será ignorado na análise.")
+
+    if not all_data:
         return pd.DataFrame()
 
-    # Acessa os preços de fechamento ajustado.
-    adj_close = data.get('Adj Close')
+    # Concatena todas as séries de dados em um único DataFrame
+    return pd.concat(all_data, axis=1)
 
-    # Se 'Adj Close' não existir (pode acontecer em erros), retorne DF vazio.
-    if adj_close is None:
-        return pd.DataFrame()
-
-    # Se apenas um ticker for baixado, yfinance retorna uma Série.
-    # Precisamos garantir que o resultado seja sempre um DataFrame.
-    if isinstance(adj_close, pd.Series):
-        adj_close = adj_close.to_frame(name=tickers[0])
-        
-    return adj_close
 
 def calculate_portfolio_risk(allocations_df: pd.DataFrame):
     """
@@ -56,10 +62,10 @@ def calculate_portfolio_risk(allocations_df: pd.DataFrame):
         return None, None
 
     market_data = get_market_data(list(tickers_to_download.keys()))
-
-    # Se não houver dados de mercado após a tentativa de download, encerre.
+    
     if market_data.empty:
-        st.error(f"Não foi possível obter dados de mercado para os tickers: {list(tickers_to_download.keys())}. Verifique se os tickers no TICKER_MAP são válidos.")
+        # Este erro só aparecerá agora se NENHUM ticker funcionar
+        st.error("Não foi possível obter dados de mercado para nenhum dos ativos do portfólio.")
         return None, None
         
     market_data.ffill(inplace=True)
@@ -67,9 +73,14 @@ def calculate_portfolio_risk(allocations_df: pd.DataFrame):
     
     # Alinha os pesos com as colunas de retorno, caso algum ticker tenha falhado
     valid_tickers = daily_returns.columns
+    if len(valid_tickers) == 0:
+        st.error("Não há dados de retorno válidos para calcular o risco.")
+        return None, None
+        
     weights = np.array([tickers_to_download[ticker] / 100.0 for ticker in valid_tickers])
     # Recalcula a soma dos pesos para normalizar, caso um ticker tenha falhado
-    weights /= weights.sum()
+    if weights.sum() > 0:
+      weights /= weights.sum()
 
     portfolio_daily_returns = daily_returns.dot(weights)
     
