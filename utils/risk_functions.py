@@ -3,11 +3,9 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-# --- MAPEAMENTO DE TICKERS (COM SUGESTÃO DE MELHORIA) ---
-# O ticker ^IRX (título do tesouro americano) pode ser instável.
-# SHV é um ETF de títulos de curto prazo, uma proxy mais estável para "Caixa".
+# --- MAPEAMENTO DE TICKERS ---
 TICKER_MAP = {
-    "Caixa": "SHV",  # <<< TROCADO DE ^IRX PARA SHV (ETF mais estável)
+    "Caixa": "SHV",
     "Renda Fixa Brasil": "B5P211.SA",
     "Renda Fixa Internacional": "BND",
     "Ações Brasil": "^BVSP",
@@ -18,26 +16,37 @@ TICKER_MAP = {
 
 RISK_FREE_RATE = 0.105
 
-# --- FUNÇÃO get_market_data (VERSÃO FINAL, ROBUSTA) ---
+# --- FUNÇÃO get_market_data (VERSÃO FINAL COM FALLBACK) ---
 @st.cache_data(ttl=3600)
 def get_market_data(tickers):
     """
-    Baixa os dados históricos ticker por ticker para máxima robustez.
-    Se um ticker falhar, ele exibe o erro detalhado.
+    Baixa os dados históricos ticker por ticker.
+    Tenta usar 'Adj Close', se falhar, usa 'Close' como fallback.
     """
     all_data = []
     for ticker in tickers:
         try:
             data = yf.download(ticker, period="3y", progress=False)
             if data.empty:
-                raise ValueError("DataFrame vazio retornado pelo yfinance.")
+                raise ValueError("DataFrame vazio retornado.")
             
-            adj_close = data['Adj Close'].rename(ticker)
-            all_data.append(adj_close)
+            price_series = None
+            # Tenta usar 'Adj Close' primeiro
+            if 'Adj Close' in data.columns:
+                price_series = data['Adj Close']
+            # Se não existir, usa 'Close' como fallback e avisa o usuário
+            elif 'Close' in data.columns:
+                price_series = data['Close']
+                st.info(f"Usando 'Close' como fallback para o ticker '{ticker}'.")
+            else:
+                # Se nenhum dos dois existir, o dado é inútil.
+                raise ValueError(f"Não foi possível encontrar 'Adj Close' ou 'Close'. Colunas disponíveis: {data.columns.to_list()}")
+            
+            # Renomeia a série com o nome do ticker e adiciona à lista
+            all_data.append(price_series.rename(ticker))
 
         except Exception as e:
-            # MUDANÇA IMPORTANTE: Exibe o erro real na tela
-            st.error(f"Falha ao obter dados para '{ticker}': {e}")
+            st.warning(f"Não foi possível processar dados para o ticker '{ticker}'. Erro: {e}")
 
     if not all_data:
         return pd.DataFrame()
@@ -53,7 +62,7 @@ def calculate_portfolio_risk(allocations_df: pd.DataFrame):
         return None, None
 
     active_allocations = allocations_df[allocations_df['allocation_pct'] > 0]
-    tickers_to_download = {TICKER_MAP[asset]: pct for asset, pct in active_allocations.set_index('asset_class')['allocation_pct'].to_dict().items()}
+    tickers_to_download = {TICKER_MAP.get(asset): pct for asset, pct in active_allocations.set_index('asset_class')['allocation_pct'].to_dict().items() if TICKER_MAP.get(asset)}
     
     if not tickers_to_download:
         return None, None
@@ -61,21 +70,18 @@ def calculate_portfolio_risk(allocations_df: pd.DataFrame):
     market_data = get_market_data(list(tickers_to_download.keys()))
     
     if market_data.empty:
-        # Este erro só aparecerá agora se NENHUM ticker funcionar
         st.error("Não foi possível obter dados de mercado para nenhum dos ativos do portfólio.")
         return None, None
         
     market_data.ffill(inplace=True)
     daily_returns = market_data.pct_change().dropna()
     
-    # Alinha os pesos com as colunas de retorno, caso algum ticker tenha falhado
     valid_tickers = daily_returns.columns
     if len(valid_tickers) == 0:
         st.error("Não há dados de retorno válidos para calcular o risco.")
         return None, None
         
     weights = np.array([tickers_to_download[ticker] / 100.0 for ticker in valid_tickers])
-    # Recalcula a soma dos pesos para normalizar, caso um ticker tenha falhado
     if weights.sum() > 0:
       weights /= weights.sum()
 
