@@ -55,6 +55,7 @@ def get_market_data(tickers):
 def calculate_portfolio_risk(allocations_df: pd.DataFrame):
     """
     Calcula as métricas de risco para um portfólio com base na sua alocação.
+    INCLUI SAÍDAS DE DEPURAÇÃO.
     """
     if allocations_df.empty:
         return None, None
@@ -79,10 +80,25 @@ def calculate_portfolio_risk(allocations_df: pd.DataFrame):
         st.error("Não há dados de retorno válidos para calcular o risco.")
         return None, None
         
-    # --- LINHA CORRIGIDA ---
-    # Usando colchetes [ticker] para acessar o dicionário corretamente.
-    weights = np.array([tickers_to_download[ticker] / 100.0 for ticker in valid_tickers])
-    
+    # --- INÍCIO DA SEÇÃO DE DEPURAÇÃO ---
+    st.subheader("Informações de Depuração")
+    st.markdown("👇 Compare as duas listas abaixo para encontrar a inconsistência.")
+
+    st.write("**Tickers e pesos que a função ESPERA encontrar:**")
+    st.json(tickers_to_download)
+
+    st.write("**Tickers que a função REALMENTE recebeu como colunas:**")
+    st.write(valid_tickers.to_list())
+    st.markdown("---")
+    # --- FIM DA SEÇÃO DE DEPURAÇÃO ---
+
+    try:
+        # Esta é a linha que está falhando
+        weights = np.array([tickers_to_download[ticker] / 100.0 for ticker in valid_tickers])
+    except KeyError as e:
+        st.error(f"CRASH: O ticker {e} foi recebido da busca de dados, mas não pôde ser encontrado no dicionário de tickers esperados. Compare as listas acima para ver a diferença (ex: '.SA' faltando).")
+        st.stop() # Interrompe a execução para evitar mais erros
+
     if weights.sum() > 0:
       weights /= weights.sum()
 
