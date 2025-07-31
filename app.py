@@ -1,4 +1,5 @@
 import streamlit as st
+from utils.db_functions import initialize_database
 
 # Configuração da página
 st.set_page_config(
@@ -6,6 +7,9 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
+
+# Roda a função de inicialização do banco de dados na inicialização do app
+initialize_database()
 
 # --- LÓGICA DE AUTENTICAÇÃO ---
 
