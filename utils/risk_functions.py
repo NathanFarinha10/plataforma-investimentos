@@ -55,7 +55,7 @@ def get_market_data(tickers):
 def calculate_portfolio_risk(allocations_df: pd.DataFrame):
     """
     Calcula as métricas de risco para um portfólio com base na sua alocação.
-    INCLUI SAÍDAS DE DEPURAÇÃO.
+    Versão final com correção de MultiIndex.
     """
     if allocations_df.empty:
         return None, None
@@ -75,30 +75,20 @@ def calculate_portfolio_risk(allocations_df: pd.DataFrame):
     market_data.ffill(inplace=True)
     daily_returns = market_data.pct_change().dropna()
     
+    # --- INÍCIO DA CORREÇÃO DEFINITIVA ---
+    # Se as colunas forem um MultiIndex (ex: [('SHV', 'SHV')]), achata para um índice simples (ex: ['SHV'])
+    if isinstance(daily_returns.columns, pd.MultiIndex):
+        daily_returns.columns = daily_returns.columns.get_level_values(0)
+    # --- FIM DA CORREÇÃO DEFINITIVA ---
+
     valid_tickers = daily_returns.columns
     if len(valid_tickers) == 0:
         st.error("Não há dados de retorno válidos para calcular o risco.")
         return None, None
         
-    # --- INÍCIO DA SEÇÃO DE DEPURAÇÃO ---
-    st.subheader("Informações de Depuração")
-    st.markdown("👇 Compare as duas listas abaixo para encontrar a inconsistência.")
-
-    st.write("**Tickers e pesos que a função ESPERA encontrar:**")
-    st.json(tickers_to_download)
-
-    st.write("**Tickers que a função REALMENTE recebeu como colunas:**")
-    st.write(valid_tickers.to_list())
-    st.markdown("---")
-    # --- FIM DA SEÇÃO DE DEPURAÇÃO ---
-
-    try:
-        # Esta é a linha que está falhando
-        weights = np.array([tickers_to_download[ticker] / 100.0 for ticker in valid_tickers])
-    except KeyError as e:
-        st.error(f"CRASH: O ticker {e} foi recebido da busca de dados, mas não pôde ser encontrado no dicionário de tickers esperados. Compare as listas acima para ver a diferença (ex: '.SA' faltando).")
-        st.stop() # Interrompe a execução para evitar mais erros
-
+    # Esta linha agora funcionará, pois valid_tickers conterá strings simples
+    weights = np.array([tickers_to_download[ticker] / 100.0 for ticker in valid_tickers])
+    
     if weights.sum() > 0:
       weights /= weights.sum()
 
