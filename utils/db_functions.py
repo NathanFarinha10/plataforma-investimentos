@@ -97,3 +97,26 @@ def save_allocations(portfolio_name, allocations_dict):
     conn.commit()
     conn.close()
     st.cache_data.clear() # Limpa o cache após salvar novos dados
+
+def save_analysis(title, source, summary, author):
+    """Salva uma nova análise de mercado no banco de dados."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute('''
+        INSERT INTO analyses (title, source, summary, author, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (title, source, summary, author, current_time))
+    conn.commit()
+    conn.close()
+    st.cache_data.clear() # Limpa o cache para garantir que a nova análise apareça
+
+@st.cache_data(ttl=300)
+def get_all_analyses():
+    """Busca todas as análises salvas, da mais recente para a mais antiga."""
+    conn = get_db_connection()
+    query = "SELECT title, source, summary, author, created_at FROM analyses ORDER BY created_at DESC"
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
+# >>> FIM DAS NOVAS FUNÇÕES <<<
