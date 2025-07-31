@@ -23,28 +23,25 @@ RISK_FREE_RATE = 0.105
 def get_market_data(tickers):
     """
     Baixa os dados históricos ticker por ticker para máxima robustez.
-    Se um ticker falhar, ele é ignorado e um aviso é exibido.
+    Se um ticker falhar, ele exibe o erro detalhado.
     """
     all_data = []
     for ticker in tickers:
         try:
-            # Baixa dados para um único ticker
-            data = yf.download(ticker, period="3y", progress=False) # progress=False para limpar o log
+            data = yf.download(ticker, period="3y", progress=False)
             if data.empty:
-                raise ValueError("DataFrame vazio retornado.")
+                raise ValueError("DataFrame vazio retornado pelo yfinance.")
             
-            # Pega o 'Adj Close' e renomeia a série com o nome do ticker
             adj_close = data['Adj Close'].rename(ticker)
             all_data.append(adj_close)
 
         except Exception as e:
-            # Se falhar, exibe um aviso na tela para o usuário
-            st.warning(f"Não foi possível obter dados para o ticker '{ticker}'. Ele será ignorado na análise.")
+            # MUDANÇA IMPORTANTE: Exibe o erro real na tela
+            st.error(f"Falha ao obter dados para '{ticker}': {e}")
 
     if not all_data:
         return pd.DataFrame()
 
-    # Concatena todas as séries de dados em um único DataFrame
     return pd.concat(all_data, axis=1)
 
 
