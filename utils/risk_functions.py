@@ -79,7 +79,10 @@ def calculate_portfolio_risk(allocations_df: pd.DataFrame):
         st.error("Não há dados de retorno válidos para calcular o risco.")
         return None, None
         
+    # --- LINHA CORRIGIDA ---
+    # Usando colchetes [ticker] para acessar o dicionário corretamente.
     weights = np.array([tickers_to_download[ticker] / 100.0 for ticker in valid_tickers])
+    
     if weights.sum() > 0:
       weights /= weights.sum()
 
