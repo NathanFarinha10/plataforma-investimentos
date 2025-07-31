@@ -20,38 +20,36 @@ RISK_FREE_RATE = 0.105
 @st.cache_data(ttl=3600)
 def get_market_data(tickers):
     """
-    Baixa os dados históricos ticker por ticker.
-    Tenta usar 'Adj Close', se falhar, usa 'Close' como fallback.
+    Baixa dados ticker por ticker e os une de forma segura.
     """
-    all_data = []
+    all_series = {}  # Usaremos um dicionário para armazenar as séries de preços
     for ticker in tickers:
         try:
             data = yf.download(ticker, period="3y", progress=False)
             if data.empty:
-                raise ValueError("DataFrame vazio retornado.")
+                raise ValueError("DataFrame vazio.")
             
             price_series = None
-            # Tenta usar 'Adj Close' primeiro
+            # Tenta usar 'Adj Close', se falhar, usa 'Close'
             if 'Adj Close' in data.columns:
                 price_series = data['Adj Close']
-            # Se não existir, usa 'Close' como fallback e avisa o usuário
             elif 'Close' in data.columns:
-                price_series = data['Close']
                 st.info(f"Usando 'Close' como fallback para o ticker '{ticker}'.")
+                price_series = data['Close']
             else:
-                # Se nenhum dos dois existir, o dado é inútil.
-                raise ValueError(f"Não foi possível encontrar 'Adj Close' ou 'Close'. Colunas disponíveis: {data.columns.to_list()}")
-            
-            # Renomeia a série com o nome do ticker e adiciona à lista
-            all_data.append(price_series.rename(ticker))
+                raise ValueError(f"Não foi possível encontrar 'Adj Close' ou 'Close'.")
+
+            # Adiciona a série ao dicionário, com o ticker como a chave
+            all_series[ticker] = price_series
 
         except Exception as e:
             st.warning(f"Não foi possível processar dados para o ticker '{ticker}'. Erro: {e}")
 
-    if not all_data:
+    if not all_series:
         return pd.DataFrame()
 
-    return pd.concat(all_data, axis=1)
+    # O pd.concat irá usar as chaves do dicionário como nomes das colunas
+    return pd.concat(all_series, axis=1)
 
 
 def calculate_portfolio_risk(allocations_df: pd.DataFrame):
