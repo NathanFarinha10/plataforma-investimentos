@@ -55,7 +55,7 @@ def get_market_data(tickers):
 def calculate_portfolio_risk(allocations_df: pd.DataFrame):
     """
     Calcula as métricas de risco para um portfólio com base na sua alocação.
-    Versão final com correção de MultiIndex.
+    Versão final com correção de dados insuficientes.
     """
     if allocations_df.empty:
         return None, None
@@ -75,18 +75,21 @@ def calculate_portfolio_risk(allocations_df: pd.DataFrame):
     market_data.ffill(inplace=True)
     daily_returns = market_data.pct_change().dropna()
     
-    # --- INÍCIO DA CORREÇÃO DEFINITIVA ---
-    # Se as colunas forem um MultiIndex (ex: [('SHV', 'SHV')]), achata para um índice simples (ex: ['SHV'])
+    # --- INÍCIO DA CORREÇÃO ---
+    # Verifica se, após remover NaNs, ainda há dados de retorno suficientes
+    if daily_returns.empty:
+        st.error("Dados históricos insuficientes para calcular o risco (são necessários pelo menos 2 dias de cotações).")
+        return None, None
+    # --- FIM DA CORREÇÃO ---
+    
     if isinstance(daily_returns.columns, pd.MultiIndex):
         daily_returns.columns = daily_returns.columns.get_level_values(0)
-    # --- FIM DA CORREÇÃO DEFINITIVA ---
 
     valid_tickers = daily_returns.columns
     if len(valid_tickers) == 0:
         st.error("Não há dados de retorno válidos para calcular o risco.")
         return None, None
         
-    # Esta linha agora funcionará, pois valid_tickers conterá strings simples
     weights = np.array([tickers_to_download[ticker] / 100.0 for ticker in valid_tickers])
     
     if weights.sum() > 0:
